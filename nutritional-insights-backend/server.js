@@ -359,8 +359,8 @@ app.get("/api/clusters", async (req, res) => {
     const result = kmeans(X, k);
 
     const centers = result.centroids.map((c) =>
-      c.centroid.map((v) => Number(v.toFixed(2)))
-    );
+  c.map((v) => Number(v.toFixed(2)))
+);
 
     const sample = [];
     const limit = Math.min(50, rows.length);
