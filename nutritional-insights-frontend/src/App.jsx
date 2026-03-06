@@ -1,3 +1,4 @@
+```javascript
 import { useEffect, useState } from "react";
 import Header from "./components/Header";
 import ChartsGrid from "./components/ChartsGrid";
@@ -9,9 +10,13 @@ import ClustersList from "./components/Clusterslist";
 import InsightsSummary from "./components/InsightsSummary";
 import Spinner from "./components/Spinner";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001";
+const API_BASE =
+  import.meta.env.VITE_API_BASE ||
+  "https://nutritional-insights-api-2-evd5cncgbbc9epce.canadacentral-01.azurewebsites.net";
+
 async function apiGet(endpoint, params) {
   const url = new URL(`${API_BASE}${endpoint}`);
+
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
       url.searchParams.set(key, String(value));
@@ -20,6 +25,7 @@ async function apiGet(endpoint, params) {
 
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+
   return res.json();
 }
 
@@ -44,6 +50,7 @@ export default function App() {
     setActive("insights");
     setLoading(true);
     setError("");
+
     try {
       const json = await apiGet("/api/insights", params);
       setData(json);
@@ -58,6 +65,7 @@ export default function App() {
     setActive("recipes");
     setLoading(true);
     setError("");
+
     try {
       const json = await apiGet("/api/recipes", params);
       setData(json);
@@ -72,6 +80,7 @@ export default function App() {
     setActive("clusters");
     setLoading(true);
     setError("");
+
     try {
       const json = await apiGet("/api/clusters", params);
       setData(json);
@@ -82,13 +91,13 @@ export default function App() {
     }
   };
 
-  // ✅ Initial load: fetch insights once on page load
+  // Initial load
   useEffect(() => {
     fetchInsights();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Auto-refresh for insights when filters/page change
+  // Auto refresh insights when filters change
   useEffect(() => {
     if (active === "insights") {
       fetchInsights();
@@ -101,6 +110,7 @@ export default function App() {
       <Header />
 
       <main className="container mx-auto p-6">
+
         {/* Insights View */}
         {active === "insights" && (
           <>
@@ -153,11 +163,13 @@ export default function App() {
         </section>
 
         {/* Recipes View */}
-        {data && active === "recipes" && <RecipesList recipes={data.recipes} />}
+        {data && active === "recipes" && (
+          <RecipesList recipes={data.recipes} />
+        )}
 
         {/* Clusters View */}
         {data && active === "clusters" && (
-          <ClustersList clusters={data.clusters} />
+          <ClustersList clusters={data.sample} />
         )}
 
         {/* Pagination */}
@@ -185,3 +197,4 @@ export default function App() {
     </div>
   );
 }
+```
