@@ -7,7 +7,7 @@ const kmeans = require("ml-kmeans");
 
 const app = express();
 
-console.log(" LATEST AZURE BACKEND VERSION LOADED");
+console.log("LATEST AZURE BACKEND VERSION LOADED");
 
 app.use(cors());
 app.use(express.json());
@@ -64,9 +64,14 @@ function corr(a, b) {
 function detectDelimiter(filePath) {
   const head = fs.readFileSync(filePath, "utf8").slice(0, 5000);
   const firstLine = head.split(/\r?\n/)[0] || "";
+
   const commas = (firstLine.match(/,/g) || []).length;
   const semis = (firstLine.match(/;/g) || []).length;
-  return semis > commas ? ";" : ",";
+  const tabs = (firstLine.match(/\t/g) || []).length;
+
+  if (tabs > commas && tabs > semis) return "\t";
+  if (semis > commas) return ";";
+  return ",";
 }
 
 function pickValue(row, keys) {
@@ -174,8 +179,8 @@ async function loadCSV() {
 
   cachedRows = rows;
 
-  console.log("✅ CSV loaded");
-  console.log("Delimiter detected:", delimiter);
+  console.log("CSV loaded");
+  console.log("Delimiter detected:", JSON.stringify(delimiter));
   console.log("Rows loaded:", rows.length);
   console.log("Sample row:", rows[0]);
 
@@ -387,6 +392,6 @@ app.get("/api/clusters", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📄 CSV path: ${CSV_PATH}`);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`CSV path: ${CSV_PATH}`);
 });
