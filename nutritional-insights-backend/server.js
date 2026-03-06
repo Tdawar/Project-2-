@@ -64,12 +64,8 @@ function detectDelimiter(filePath) {
   const head = fs.readFileSync(filePath, "utf8").slice(0, 5000);
   const firstLine = head.split(/\r?\n/)[0] || "";
 
-  const commas = (firstLine.match(/,/g) || []).length;
-  const semis = (firstLine.match(/;/g) || []).length;
-  const tabs = (firstLine.match(/\t/g) || []).length;
-
-  if (tabs > commas && tabs > semis) return "\t";
-  if (semis > commas) return ";";
+  if (firstLine.includes("\t")) return "\t";
+  if (firstLine.includes(";")) return ";";
   return ",";
 }
 
