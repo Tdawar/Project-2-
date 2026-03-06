@@ -1,4 +1,3 @@
-```javascript
 import { useEffect, useState } from "react";
 import Header from "./components/Header";
 import ChartsGrid from "./components/ChartsGrid";
@@ -10,21 +9,30 @@ import ClustersList from "./components/Clusterslist";
 import InsightsSummary from "./components/InsightsSummary";
 import Spinner from "./components/Spinner";
 
+/* Backend API */
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   "https://nutritional-insights-api-2-evd5cncgbbc9epce.canadacentral-01.azurewebsites.net";
 
+/* Generic API fetch */
 async function apiGet(endpoint, params) {
   const url = new URL(`${API_BASE}${endpoint}`);
 
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && String(value).trim() !== "") {
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (
+      value !== undefined &&
+      value !== null &&
+      String(value).trim() !== ""
+    ) {
       url.searchParams.set(key, String(value));
     }
   });
 
   const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status}`);
+  }
 
   return res.json();
 }
@@ -35,7 +43,8 @@ export default function App() {
   const [page, setPage] = useState(1);
 
   const [data, setData] = useState(null);
-  const [active, setActive] = useState("insights"); // insights | recipes | clusters
+  const [active, setActive] = useState("insights");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -46,6 +55,7 @@ export default function App() {
     pageSize: 10,
   };
 
+  /* Fetch Insights */
   const fetchInsights = async () => {
     setActive("insights");
     setLoading(true);
@@ -61,6 +71,7 @@ export default function App() {
     }
   };
 
+  /* Fetch Recipes */
   const fetchRecipes = async () => {
     setActive("recipes");
     setLoading(true);
@@ -76,6 +87,7 @@ export default function App() {
     }
   };
 
+  /* Fetch Clusters */
   const fetchClusters = async () => {
     setActive("clusters");
     setLoading(true);
@@ -91,19 +103,17 @@ export default function App() {
     }
   };
 
-  // Initial load
+  /* Initial Load */
   useEffect(() => {
     fetchInsights();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto refresh insights when filters change
+  /* Auto refresh insights when filters change */
   useEffect(() => {
     if (active === "insights") {
       fetchInsights();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, dietType, page, active]);
+  }, [search, dietType, page]);
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -111,10 +121,10 @@ export default function App() {
 
       <main className="container mx-auto p-6">
 
-        {/* Insights View */}
-        {active === "insights" && (
+        {/* Insights */}
+        {active === "insights" && data && (
           <>
-            <InsightsSummary summary={data?.summary} />
+            <InsightsSummary summary={data.summary} />
             <ChartsGrid data={data} />
           </>
         )}
@@ -136,7 +146,7 @@ export default function App() {
           />
 
           <div className="text-xs text-gray-500 mt-2">
-            Insights auto-refresh. Recipes/Clusters need a button click.
+            Insights auto-refresh. Recipes and Clusters require button click.
           </div>
         </section>
 
@@ -156,18 +166,18 @@ export default function App() {
           {loading && <Spinner />}
 
           {error && (
-            <div className="text-sm text-red-600 mt-3">
+            <div className="text-red-600 text-sm mt-3">
               {error}
             </div>
           )}
         </section>
 
-        {/* Recipes View */}
+        {/* Recipes */}
         {data && active === "recipes" && (
           <RecipesList recipes={data.recipes} />
         )}
 
-        {/* Clusters View */}
+        {/* Clusters */}
         {data && active === "clusters" && (
           <ClustersList clusters={data.sample} />
         )}
@@ -186,15 +196,15 @@ export default function App() {
           />
 
           <div className="text-xs text-gray-500 mt-2">
-            Pagination uses backend meta.total. Page changes auto-refresh Insights.
+            Pagination uses backend meta.total.
           </div>
         </section>
+
       </main>
 
       <footer className="bg-blue-600 p-4 text-white text-center mt-10">
-        &copy; 2025 Nutritional Insights
+        © 2025 Nutritional Insights
       </footer>
     </div>
   );
 }
-```
