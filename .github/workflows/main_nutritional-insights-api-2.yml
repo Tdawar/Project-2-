@@ -14,14 +14,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
-      - name: Install backend dependencies
+      - name: Install dependencies
         working-directory: nutritional-insights-backend
-        run: npm ci
+        run: npm install
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
