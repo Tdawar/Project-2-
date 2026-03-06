@@ -3,8 +3,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const csv = require("csv-parser");
-const kmeans = require("ml-kmeans");
-
+const { kmeans } = require("ml-kmeans");
 const app = express();
 
 console.log("LATEST AZURE BACKEND VERSION LOADED");
