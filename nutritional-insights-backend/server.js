@@ -8,7 +8,19 @@ const app = express();
 
 console.log("LATEST AZURE BACKEND VERSION LOADED");
 
-app.use(cors());
+// CORS origins are controlled by environment to keep local values out of commits.
+const allowedOrigins = [process.env.FRONTEND_ORIGIN].filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow server-to-server calls and local tools without Origin header.
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS origin not allowed"));
+    },
+  }),
+);
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
@@ -17,12 +29,16 @@ const CSV_PATH = path.join(__dirname, "All_Diets.csv");
 let cachedRows = null;
 
 function toLower(s) {
-  return String(s || "").toLowerCase().trim();
+  return String(s || "")
+    .toLowerCase()
+    .trim();
 }
 
 function toNumber(v) {
   if (v === null || v === undefined) return 0;
-  const cleaned = String(v).replace(",", ".").trim();
+  const cleaned = String(v)
+    .replace(",", ".")
+    .trim();
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : 0;
 }
@@ -71,11 +87,22 @@ function detectDelimiter(filePath) {
 
 function pickValue(row, keys) {
   for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") {
+    if (
+      row[key] !== undefined &&
+      row[key] !== null &&
+      String(row[key]).trim() !== ""
+    ) {
       return String(row[key]).trim();
     }
   }
   return "";
+}
+
+function parseIntInRange(value, defaultValue, min, max) {
+  // Defensive parsing prevents NaN and constrains expensive input values.
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(max, Math.max(min, parsed));
 }
 
 async function loadCSV() {
@@ -94,10 +121,12 @@ async function loadCSV() {
         csv({
           separator: delimiter,
           mapHeaders: ({ header }) =>
-            String(header || "").replace(/^\uFEFF/, "").trim(),
+            String(header || "")
+              .replace(/^\uFEFF/, "")
+              .trim(),
           mapValues: ({ value }) =>
             typeof value === "string" ? value.trim() : value,
-        })
+        }),
       )
       .on("data", (row) => {
         const diet = pickValue(row, [
@@ -134,7 +163,7 @@ async function loadCSV() {
             row["Protein (g)"] ??
             row["Protein"] ??
             row["protein"] ??
-            row["protein(g)"]
+            row["protein(g)"],
         );
 
         const carbs = toNumber(
@@ -143,7 +172,7 @@ async function loadCSV() {
             row["Carbohydrates (g)"] ??
             row["Carbohydrates"] ??
             row["Carbs"] ??
-            row["carbs"]
+            row["carbs"],
         );
 
         const fat = toNumber(
@@ -151,7 +180,7 @@ async function loadCSV() {
             row["Fat (g)"] ??
             row["Fat"] ??
             row["fat"] ??
-            row["Fats (g)"]
+            row["Fats (g)"],
         );
 
         if (!diet || !recipe) return;
@@ -208,7 +237,7 @@ app.get("/api/insights", async (req, res) => {
         (r) =>
           toLower(r.diet).includes(q) ||
           toLower(r.name).includes(q) ||
-          toLower(r.cuisine_type).includes(q)
+          toLower(r.cuisine_type).includes(q),
       );
     }
 
@@ -302,8 +331,8 @@ app.get("/api/recipes", async (req, res) => {
   try {
     const dietType = toLower(req.query.dietType || "all");
     const q = toLower(req.query.q || "");
-    const page = Math.max(1, Number(req.query.page || 1));
-    const pageSize = Math.max(1, Number(req.query.pageSize || 10));
+    const page = parseIntInRange(req.query.page, 1, 1, 100000);
+    const pageSize = parseIntInRange(req.query.pageSize, 10, 1, 100);
 
     const rows = await loadCSV();
 
@@ -316,8 +345,7 @@ app.get("/api/recipes", async (req, res) => {
     if (q) {
       filtered = filtered.filter(
         (r) =>
-          toLower(r.name).includes(q) ||
-          toLower(r.cuisine_type).includes(q)
+          toLower(r.name).includes(q) || toLower(r.cuisine_type).includes(q),
       );
     }
 
@@ -331,6 +359,8 @@ app.get("/api/recipes", async (req, res) => {
 
     res.json({
       recipes: items.map((r) => ({
+        // Deterministic id supports stable React keys in the frontend.
+        id: `${r.name}::${r.dietType}::${r.cuisine_type}::${r.calories}`,
         name: r.name,
         dietType: r.dietType,
         calories: r.calories,
@@ -348,30 +378,45 @@ app.get("/api/recipes", async (req, res) => {
 
 app.get("/api/clusters", async (req, res) => {
   try {
-    const rows = await loadCSV();
-    const k = Math.min(10, Math.max(2, Number(req.query.k || 3)));
+    const dietType = toLower(req.query.dietType || "all");
+    const q = toLower(req.query.q || "");
+    const k = parseIntInRange(req.query.k, 3, 2, 10);
 
-    if (!rows.length) {
+    const rows = await loadCSV();
+    let filtered = rows;
+
+    if (dietType !== "all") {
+      filtered = filtered.filter((r) => toLower(r.dietType) === dietType);
+    }
+
+    if (q) {
+      filtered = filtered.filter(
+        (r) =>
+          toLower(r.name).includes(q) || toLower(r.cuisine_type).includes(q),
+      );
+    }
+
+    if (!filtered.length) {
       return res.json({ k, clusterCenters: [], sample: [] });
     }
 
-    const X = rows.map((r) => [r.protein, r.carbs, r.fat]);
+    const X = filtered.map((r) => [r.protein, r.carbs, r.fat]);
     const result = kmeans(X, k);
 
     const centers = result.centroids.map((c) =>
-  c.map((v) => Number(v.toFixed(2)))
-);
+      c.map((v) => Number(v.toFixed(2))),
+    );
 
     const sample = [];
-    const limit = Math.min(50, rows.length);
+    const limit = Math.min(50, filtered.length);
 
     for (let i = 0; i < limit; i++) {
       sample.push({
-        name: rows[i].name,
-        dietType: rows[i].dietType,
-        protein: rows[i].protein,
-        carbs: rows[i].carbs,
-        fat: rows[i].fat,
+        name: filtered[i].name,
+        dietType: filtered[i].dietType,
+        protein: filtered[i].protein,
+        carbs: filtered[i].carbs,
+        fat: filtered[i].fat,
         cluster: result.clusters[i],
       });
     }

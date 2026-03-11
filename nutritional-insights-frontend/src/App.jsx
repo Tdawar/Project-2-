@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Header from "./components/Header";
 import ChartsGrid from "./components/ChartsGrid";
 import Filters from "./components/Filters";
@@ -12,6 +12,7 @@ import Spinner from "./components/Spinner";
 /* Backend API */
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
+  // Fallback keeps production endpoint when no local env override is set.
   "https://nutritional-insights-api-2-evd5cncgbbc9epce.canadacentral-01.azurewebsites.net";
 
 /* Generic API fetch */
@@ -19,11 +20,7 @@ async function apiGet(endpoint, params) {
   const url = new URL(`${API_BASE}${endpoint}`);
 
   Object.entries(params || {}).forEach(([key, value]) => {
-    if (
-      value !== undefined &&
-      value !== null &&
-      String(value).trim() !== ""
-    ) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
       url.searchParams.set(key, String(value));
     }
   });
@@ -48,15 +45,19 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const params = {
-    q: search,
-    dietType,
-    page,
-    pageSize: 10,
-  };
+  const params = useMemo(
+    // Memoized params prevent unnecessary callback/effect re-runs.
+    () => ({
+      q: search,
+      dietType,
+      page,
+      pageSize: 10,
+    }),
+    [search, dietType, page],
+  );
 
   /* Fetch Insights */
-  const fetchInsights = async () => {
+  const fetchInsights = useCallback(async () => {
     setActive("insights");
     setLoading(true);
     setError("");
@@ -69,10 +70,10 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [params]);
 
   /* Fetch Recipes */
-  const fetchRecipes = async () => {
+  const fetchRecipes = useCallback(async () => {
     setActive("recipes");
     setLoading(true);
     setError("");
@@ -85,10 +86,10 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [params]);
 
   /* Fetch Clusters */
-  const fetchClusters = async () => {
+  const fetchClusters = useCallback(async () => {
     setActive("clusters");
     setLoading(true);
     setError("");
@@ -101,26 +102,20 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  };
-
-  /* Initial Load */
-  useEffect(() => {
-    fetchInsights();
-  }, []);
+  }, [params]);
 
   /* Auto refresh insights when filters change */
   useEffect(() => {
     if (active === "insights") {
       fetchInsights();
     }
-  }, [search, dietType, page]);
+  }, [active, fetchInsights]);
 
   return (
     <div className="min-h-screen bg-gray-100">
       <Header />
 
       <main className="container mx-auto p-6">
-
         {/* Insights */}
         {active === "insights" && data && (
           <>
@@ -152,9 +147,7 @@ export default function App() {
 
         {/* API Buttons */}
         <section className="my-8">
-          <h2 className="text-2xl font-semibold mb-4">
-            API Data Interaction
-          </h2>
+          <h2 className="text-2xl font-semibold mb-4">API Data Interaction</h2>
 
           <ApiButtons
             onInsights={fetchInsights}
@@ -165,17 +158,11 @@ export default function App() {
 
           {loading && <Spinner />}
 
-          {error && (
-            <div className="text-red-600 text-sm mt-3">
-              {error}
-            </div>
-          )}
+          {error && <div className="text-red-600 text-sm mt-3">{error}</div>}
         </section>
 
         {/* Recipes */}
-        {data && active === "recipes" && (
-          <RecipesList recipes={data.recipes} />
-        )}
+        {data && active === "recipes" && <RecipesList recipes={data.recipes} />}
 
         {/* Clusters */}
         {data && active === "clusters" && (
@@ -184,9 +171,7 @@ export default function App() {
 
         {/* Pagination */}
         <section className="my-10">
-          <h2 className="text-2xl font-semibold mb-4">
-            Pagination
-          </h2>
+          <h2 className="text-2xl font-semibold mb-4">Pagination</h2>
 
           <Pagination
             page={page}
@@ -199,7 +184,6 @@ export default function App() {
             Pagination uses backend meta.total.
           </div>
         </section>
-
       </main>
 
       <footer className="bg-blue-600 p-4 text-white text-center mt-10">

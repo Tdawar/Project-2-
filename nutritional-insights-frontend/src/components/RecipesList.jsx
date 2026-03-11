@@ -10,6 +10,7 @@ export default function RecipesList({ recipes = [] }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
       {recipes.map((r) => (
+        // Uses API-provided id for stable rendering across updates.
         <div key={r.id} className="bg-white p-4 rounded-lg shadow">
           <h3 className="font-semibold">{r.name}</h3>
           <div className="text-sm text-gray-600 mt-1">Diet: {r.dietType}</div>
