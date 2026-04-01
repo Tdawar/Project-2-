@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
@@ -10,33 +10,61 @@ export default function OAuthLogin() {
   const [provider, setProvider] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [maskedEmail, setMaskedEmail] = useState("");
+  const [providerAvailability, setProviderAvailability] = useState({
+    google: true,
+    github: true,
+  });
 
-  async function startLogin(selectedProvider) {
-    setLoading(true);
-    setStatus("");
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthChallenge = params.get("oauthChallenge");
+    const oauthProvider = params.get("oauthProvider");
+    const oauthEmail = params.get("oauthEmail");
+    const authError = params.get("authError");
 
-    try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: selectedProvider }),
-      });
-
-      const json = await res.json();
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error || "Failed to start login");
-      }
-
-      setProvider(json.provider);
-      setChallengeId(json.challengeId);
-      setStatus(
-        `Code sent. Demo code: ${json.demoCode}. Enter it below to finish ${json.provider} login.`
-      );
-    } catch (e) {
-      setStatus(`Login error: ${e.message || "Unknown error"}`);
-    } finally {
-      setLoading(false);
+    if (oauthChallenge && oauthProvider) {
+      setChallengeId(oauthChallenge);
+      setProvider(oauthProvider);
+      setMaskedEmail(oauthEmail || "not-available");
+      setStatus("OAuth successful. Enter the OTP sent to your email.");
+      params.delete("oauthChallenge");
+      params.delete("oauthProvider");
+      params.delete("oauthEmail");
+      const next = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
     }
+
+    if (authError) {
+      setStatus(`Login error: ${authError.replaceAll("_", " ")}`);
+      params.delete("authError");
+      const next = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${next ? `?${next}` : ""}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    async function loadProviders() {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/providers`);
+        const json = await res.json();
+        if (res.ok && json.ok && json.providers) {
+          setProviderAvailability({
+            google: Boolean(json.providers.google),
+            github: Boolean(json.providers.github),
+          });
+        }
+      } catch {
+        // Keep defaults so local/offline development still renders controls.
+      }
+    }
+
+    loadProviders();
+  }, []);
+
+  function startLogin(selectedProvider) {
+    const returnTo = `${window.location.origin}${window.location.pathname}`;
+    window.location.href = `${API_BASE}/api/auth/oauth/${selectedProvider}/start?returnTo=${encodeURIComponent(returnTo)}`;
   }
 
   async function verify2FA() {
@@ -68,6 +96,7 @@ export default function OAuthLogin() {
       setStatus(`Success: ${json.message}`);
       setChallengeId("");
       setProvider("");
+      setMaskedEmail("");
       setTwoFaCode("");
     } catch (e) {
       setStatus(`Verification error: ${e.message || "Unknown error"}`);
@@ -86,18 +115,24 @@ export default function OAuthLogin() {
           <button
             className="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 disabled:opacity-60"
             onClick={() => startLogin("google")}
-            disabled={loading}
+            disabled={loading || !providerAvailability.google}
           >
             Login with Google
           </button>
           <button
             className="bg-gray-800 text-white py-2 px-4 rounded hover:bg-gray-900 disabled:opacity-60"
             onClick={() => startLogin("github")}
-            disabled={loading}
+            disabled={loading || !providerAvailability.github}
           >
             Login with GitHub
           </button>
         </div>
+
+        {(!providerAvailability.google || !providerAvailability.github) && (
+          <p className="text-xs text-amber-700 mb-3">
+            One or more OAuth providers are not configured on the backend.
+          </p>
+        )}
 
         <div>
           <label htmlFor="twofa" className="block text-sm text-gray-600 mb-1">
@@ -123,7 +158,7 @@ export default function OAuthLogin() {
 
           {provider && challengeId && (
             <p className="text-xs text-gray-500 mt-2">
-              Active provider: {provider}
+              Active provider: {provider}{maskedEmail ? ` (${maskedEmail})` : ""}
             </p>
           )}
 

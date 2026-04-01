@@ -3,8 +3,16 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const session = require("express-session");
+const passport = require("passport");
+const { Strategy: GoogleStrategy } = require("passport-google-oauth20");
+const { Strategy: GitHubStrategy } = require("passport-github2");
+const nodemailer = require("nodemailer");
 const csv = require("csv-parser");
 const { kmeans } = require("ml-kmeans");
+
+require("dotenv").config();
+
 const app = express();
 
 console.log("LATEST AZURE BACKEND VERSION LOADED");
@@ -12,13 +20,116 @@ console.log("LATEST AZURE BACKEND VERSION LOADED");
 app.use(cors());
 app.use(express.json());
 
+app.set("trust proxy", 1);
+
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "replace-me-in-production",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 10 * 60 * 1000,
+    },
+  })
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 const PORT = process.env.PORT || 3001;
 const CSV_PATH = path.join(__dirname, "All_Diets.csv");
 const LOGIN_PROVIDERS = new Set(["google", "github"]);
 const AUTH_TTL_MS = 5 * 60 * 1000;
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  "https://red-meadow-0888e270f.2.azurestaticapps.net";
 
 let cachedRows = null;
 const authChallenges = new Map();
+
+const smtpConfigured =
+  Boolean(process.env.SMTP_HOST) &&
+  Boolean(process.env.SMTP_PORT) &&
+  Boolean(process.env.SMTP_USER) &&
+  Boolean(process.env.SMTP_PASS) &&
+  Boolean(process.env.OTP_FROM_EMAIL);
+
+const mailer = smtpConfigured
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT),
+      secure: String(process.env.SMTP_SECURE || "false") === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    })
+  : null;
+
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((user, done) => {
+  done(null, user);
+});
+
+if (
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET &&
+  process.env.GOOGLE_CALLBACK_URL
+) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: process.env.GOOGLE_CALLBACK_URL,
+      },
+      (accessToken, refreshToken, profile, done) => {
+        done(null, {
+          provider: "google",
+          id: profile.id,
+          displayName: profile.displayName,
+          email: profile.emails?.[0]?.value || "",
+        });
+      }
+    )
+  );
+}
+
+if (
+  process.env.GITHUB_CLIENT_ID &&
+  process.env.GITHUB_CLIENT_SECRET &&
+  process.env.GITHUB_CALLBACK_URL
+) {
+  passport.use(
+    new GitHubStrategy(
+      {
+        clientID: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET,
+        callbackURL: process.env.GITHUB_CALLBACK_URL,
+        scope: ["user:email"],
+      },
+      (accessToken, refreshToken, profile, done) => {
+        const email =
+          profile.emails?.find((e) => e.verified)?.value ||
+          profile.emails?.[0]?.value ||
+          "";
+
+        done(null, {
+          provider: "github",
+          id: profile.id,
+          displayName: profile.displayName || profile.username,
+          email,
+        });
+      }
+    )
+  );
+}
 
 function toLower(s) {
   return String(s || "").toLowerCase().trim();
@@ -93,6 +204,64 @@ function cleanupAuthChallenges() {
       authChallenges.delete(challengeId);
     }
   }
+}
+
+function maskEmail(email) {
+  const [local, domain] = String(email || "").split("@");
+  if (!local || !domain) return "not-available";
+  const visible = local.slice(0, 2);
+  return `${visible}${"*".repeat(Math.max(2, local.length - 2))}@${domain}`;
+}
+
+async function sendOtpEmail(toEmail, code, provider) {
+  if (!mailer) {
+    throw new Error("OTP email delivery is not configured on the server");
+  }
+
+  await mailer.sendMail({
+    from: process.env.OTP_FROM_EMAIL,
+    to: toEmail,
+    subject: "Your Nutritional Insights 2FA Code",
+    text: `Your ${provider} login OTP is ${code}. It expires in 5 minutes.`,
+  });
+}
+
+function resolveAuthOptions(provider) {
+  if (provider === "google") {
+    return {
+      strategy: "google",
+      options: { scope: ["profile", "email"] },
+    };
+  }
+
+  if (provider === "github") {
+    return {
+      strategy: "github",
+      options: { scope: ["read:user", "user:email"] },
+    };
+  }
+
+  return null;
+}
+
+function providerConfigured(provider) {
+  if (provider === "google") {
+    return Boolean(
+      process.env.GOOGLE_CLIENT_ID &&
+        process.env.GOOGLE_CLIENT_SECRET &&
+        process.env.GOOGLE_CALLBACK_URL
+    );
+  }
+
+  if (provider === "github") {
+    return Boolean(
+      process.env.GITHUB_CLIENT_ID &&
+        process.env.GITHUB_CLIENT_SECRET &&
+        process.env.GITHUB_CALLBACK_URL
+    );
+  }
+
+  return false;
 }
 
 async function loadCSV() {
@@ -207,40 +376,123 @@ app.get("/", (req, res) => {
   });
 });
 
-app.post("/api/auth/login", (req, res) => {
-  try {
-    cleanupAuthChallenges();
+app.get("/api/auth/providers", (req, res) => {
+  res.json({
+    ok: true,
+    providers: {
+      google: providerConfigured("google"),
+      github: providerConfigured("github"),
+    },
+    otpEmailConfigured: Boolean(mailer),
+  });
+});
 
-    const provider = toLower(req.body?.provider);
-    if (!LOGIN_PROVIDERS.has(provider)) {
-      return res.status(400).json({
-        ok: false,
-        error: "provider must be one of: google, github",
-      });
+app.get("/api/auth/oauth/:provider/start", (req, res, next) => {
+  const provider = toLower(req.params.provider);
+  if (!LOGIN_PROVIDERS.has(provider)) {
+    return res.status(400).json({ ok: false, error: "Unsupported provider" });
+  }
+
+  if (!providerConfigured(provider)) {
+    return res.status(503).json({
+      ok: false,
+      error: `${provider} OAuth is not configured on this server`,
+    });
+  }
+
+  req.session.returnTo = String(req.query.returnTo || FRONTEND_URL);
+  const authConfig = resolveAuthOptions(provider);
+  return passport.authenticate(authConfig.strategy, authConfig.options)(
+    req,
+    res,
+    next
+  );
+});
+
+app.get("/api/auth/oauth/google/callback", (req, res, next) => {
+  passport.authenticate("google", async (err, user) => {
+    const returnTo = req.session.returnTo || FRONTEND_URL;
+    delete req.session.returnTo;
+
+    if (err || !user) {
+      return res.redirect(`${returnTo}?authError=oauth_failed`);
     }
 
-    const challengeId = crypto.randomUUID();
-    const code = generateSixDigitCode();
-    const expiresAt = Date.now() + AUTH_TTL_MS;
+    if (!user.email) {
+      return res.redirect(`${returnTo}?authError=email_not_available`);
+    }
 
-    authChallenges.set(challengeId, {
-      provider,
-      code,
-      expiresAt,
-    });
+    try {
+      cleanupAuthChallenges();
+      const challengeId = crypto.randomUUID();
+      const code = generateSixDigitCode();
 
-    res.json({
-      ok: true,
-      provider,
-      challengeId,
-      // Demo-only: returned so the feature can be tested end-to-end.
-      demoCode: code,
-      expiresInSeconds: Math.floor(AUTH_TTL_MS / 1000),
-      message: `2FA code generated for ${provider}. Verify to complete login.`,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
+      authChallenges.set(challengeId, {
+        provider: user.provider,
+        code,
+        expiresAt: Date.now() + AUTH_TTL_MS,
+        user: {
+          provider: user.provider,
+          id: user.id,
+          displayName: user.displayName,
+          email: user.email,
+        },
+      });
+
+      await sendOtpEmail(user.email, code, user.provider);
+
+      return res.redirect(
+        `${returnTo}?oauthChallenge=${encodeURIComponent(challengeId)}&oauthProvider=${encodeURIComponent(user.provider)}&oauthEmail=${encodeURIComponent(maskEmail(user.email))}`
+      );
+    } catch (e) {
+      return res.redirect(
+        `${returnTo}?authError=${encodeURIComponent("otp_delivery_failed")}`
+      );
+    }
+  })(req, res, next);
+});
+
+app.get("/api/auth/oauth/github/callback", (req, res, next) => {
+  passport.authenticate("github", async (err, user) => {
+    const returnTo = req.session.returnTo || FRONTEND_URL;
+    delete req.session.returnTo;
+
+    if (err || !user) {
+      return res.redirect(`${returnTo}?authError=oauth_failed`);
+    }
+
+    if (!user.email) {
+      return res.redirect(`${returnTo}?authError=email_not_available`);
+    }
+
+    try {
+      cleanupAuthChallenges();
+      const challengeId = crypto.randomUUID();
+      const code = generateSixDigitCode();
+
+      authChallenges.set(challengeId, {
+        provider: user.provider,
+        code,
+        expiresAt: Date.now() + AUTH_TTL_MS,
+        user: {
+          provider: user.provider,
+          id: user.id,
+          displayName: user.displayName,
+          email: user.email,
+        },
+      });
+
+      await sendOtpEmail(user.email, code, user.provider);
+
+      return res.redirect(
+        `${returnTo}?oauthChallenge=${encodeURIComponent(challengeId)}&oauthProvider=${encodeURIComponent(user.provider)}&oauthEmail=${encodeURIComponent(maskEmail(user.email))}`
+      );
+    } catch (e) {
+      return res.redirect(
+        `${returnTo}?authError=${encodeURIComponent("otp_delivery_failed")}`
+      );
+    }
+  })(req, res, next);
 });
 
 app.post("/api/auth/2fa/verify", (req, res) => {
@@ -277,7 +529,7 @@ app.post("/api/auth/2fa/verify", (req, res) => {
     res.json({
       ok: true,
       message: `${challenge.provider} login successful`,
-      user: {
+      user: challenge.user || {
         provider: challenge.provider,
         role: "student",
       },
