@@ -118,6 +118,17 @@ export default function App() {
     }
   }, [search, dietType, page]);
 
+  useEffect(() => {
+    const totalPages = Math.max(
+      1,
+      Math.ceil((data?.meta?.total || 0) / (data?.meta?.pageSize || 10)),
+    );
+
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [data?.meta?.pageSize, data?.meta?.total, page]);
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Header />
@@ -140,7 +151,10 @@ export default function App() {
 
           <Filters
             search={search}
-            setSearch={setSearch}
+            setSearch={(value) => {
+              setSearch(value);
+              setPage(1);
+            }}
             dietType={dietType}
             setDietType={(value) => {
               setDietType(value);
