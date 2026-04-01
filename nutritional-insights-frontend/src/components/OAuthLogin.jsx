@@ -11,6 +11,7 @@ export default function OAuthLogin() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [maskedEmail, setMaskedEmail] = useState("");
+  const [currentUser, setCurrentUser] = useState(null);
   const [providerAvailability, setProviderAvailability] = useState({
     google: true,
     github: true,
@@ -46,7 +47,9 @@ export default function OAuthLogin() {
   useEffect(() => {
     async function loadProviders() {
       try {
-        const res = await fetch(`${API_BASE}/api/auth/providers`);
+        const res = await fetch(`${API_BASE}/api/auth/providers`, {
+          credentials: "include",
+        });
         const json = await res.json();
         if (res.ok && json.ok && json.providers) {
           setProviderAvailability({
@@ -61,6 +64,28 @@ export default function OAuthLogin() {
 
     loadProviders();
   }, []);
+
+  useEffect(() => {
+    loadCurrentUser();
+  }, []);
+
+  async function loadCurrentUser() {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/me`, {
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        setCurrentUser(null);
+        return;
+      }
+
+      const json = await res.json();
+      setCurrentUser(json.user || null);
+    } catch {
+      setCurrentUser(null);
+    }
+  }
 
   function startLogin(selectedProvider) {
     const returnTo = `${window.location.origin}${window.location.pathname}`;
@@ -85,6 +110,7 @@ export default function OAuthLogin() {
       const res = await fetch(`${API_BASE}/api/auth/2fa/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ challengeId, code: twoFaCode }),
       });
 
@@ -98,6 +124,7 @@ export default function OAuthLogin() {
       setProvider("");
       setMaskedEmail("");
       setTwoFaCode("");
+      setCurrentUser(json.user || null);
     } catch (e) {
       setStatus(`Verification error: ${e.message || "Unknown error"}`);
     } finally {
@@ -105,11 +132,45 @@ export default function OAuthLogin() {
     }
   }
 
+  async function logout() {
+    setLoading(true);
+    setStatus("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || "Logout failed");
+      }
+
+      setCurrentUser(null);
+      setChallengeId("");
+      setProvider("");
+      setMaskedEmail("");
+      setTwoFaCode("");
+      setStatus(json.message);
+    } catch (e) {
+      setStatus(`Logout error: ${e.message || "Unknown error"}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <section className="mt-8">
-      <h2 className="text-2xl font-semibold mb-4">OAuth &amp; 2FA Integration</h2>
+      <h2 className="text-2xl font-semibold mb-4">Authentication</h2>
       <div className="bg-white p-4 shadow-lg rounded-lg">
         <h3 className="font-semibold mb-4">Secure Login</h3>
+
+        <p className="text-sm text-gray-600 mb-4">
+          We only store the minimum information needed for authentication, such
+          as your name, email, and login provider. OTP codes are temporary and
+          automatically removed after expiration.
+        </p>
 
         <div className="flex flex-wrap gap-3 mb-4">
           <button
@@ -126,6 +187,21 @@ export default function OAuthLogin() {
           >
             Login with GitHub
           </button>
+        </div>
+
+        <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3 text-left">
+          <p className="text-sm font-medium text-slate-800">Current Session</p>
+          {currentUser ? (
+            <div className="mt-2 text-sm text-slate-700">
+              <p>Name: {currentUser.name}</p>
+              <p>Email: {currentUser.email}</p>
+              <p>Provider: {currentUser.provider}</p>
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-slate-600">
+              No authenticated user is currently stored in the session.
+            </p>
+          )}
         </div>
 
         {(!providerAvailability.google || !providerAvailability.github) && (
@@ -154,6 +230,14 @@ export default function OAuthLogin() {
             disabled={loading}
           >
             Verify 2FA
+          </button>
+
+          <button
+            className="ml-0 sm:ml-3 mt-3 sm:mt-0 bg-slate-700 text-white py-2 px-4 rounded hover:bg-slate-800 disabled:opacity-60"
+            onClick={logout}
+            disabled={loading || !currentUser}
+          >
+            Logout
           </button>
 
           {provider && challengeId && (

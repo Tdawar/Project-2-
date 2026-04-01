@@ -3,7 +3,9 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const helmet = require("helmet");
 const session = require("express-session");
+const rateLimit = require("express-rate-limit");
 const passport = require("passport");
 const { Strategy: GoogleStrategy } = require("passport-google-oauth20");
 const { Strategy: GitHubStrategy } = require("passport-github2");
@@ -14,41 +16,68 @@ const { kmeans } = require("ml-kmeans");
 require("dotenv").config();
 
 const app = express();
+const sessionSecret = process.env.SESSION_SECRET || crypto.randomUUID();
 
 console.log("LATEST AZURE BACKEND VERSION LOADED");
 
-app.use(cors());
-app.use(express.json());
-
 app.set("trust proxy", 1);
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+});
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
+app.use(helmet());
+app.use(express.json());
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "replace-me-in-production",
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      maxAge: 10 * 60 * 1000,
+      maxAge: 60 * 60 * 1000,
     },
   })
 );
 
 app.use(passport.initialize());
 app.use(passport.session());
+app.use("/api/auth", authLimiter);
 
 const PORT = process.env.PORT || 3001;
 const CSV_PATH = path.join(__dirname, "All_Diets.csv");
 const LOGIN_PROVIDERS = new Set(["google", "github"]);
 const AUTH_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 const FRONTEND_URL =
   process.env.FRONTEND_URL ||
   "https://red-meadow-0888e270f.2.azurestaticapps.net";
+const allowedOrigins = [
+  "http://localhost:5173",
+  FRONTEND_URL,
+].filter(Boolean);
 
-let cachedRows = null;
 const authChallenges = new Map();
+const cacheStore = new Map();
 
 const smtpConfigured =
   Boolean(process.env.SMTP_HOST) &&
@@ -61,7 +90,7 @@ const mailer = smtpConfigured
   ? nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: Number(process.env.SMTP_PORT),
-      secure: String(process.env.SMTP_SECURE || "false") === "true",
+      secure: String(process.env.SMTP_SECURE) === "true",
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
@@ -92,8 +121,7 @@ if (
       (accessToken, refreshToken, profile, done) => {
         done(null, {
           provider: "google",
-          id: profile.id,
-          displayName: profile.displayName,
+          name: profile.displayName,
           email: profile.emails?.[0]?.value || "",
         });
       }
@@ -122,8 +150,7 @@ if (
 
         done(null, {
           provider: "github",
-          id: profile.id,
-          displayName: profile.displayName || profile.username,
+          name: profile.displayName || profile.username,
           email,
         });
       }
@@ -264,7 +291,41 @@ function providerConfigured(provider) {
   return false;
 }
 
+function getCachedValue(key) {
+  const entry = cacheStore.get(key);
+  if (!entry) return null;
+
+  if (entry.expiresAt && entry.expiresAt <= Date.now()) {
+    cacheStore.delete(key);
+    return null;
+  }
+
+  return entry.value;
+}
+
+function setCachedValue(key, value, ttlMs) {
+  cacheStore.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+}
+
+function cleanupExpiredCache() {
+  const now = Date.now();
+  for (const [key, value] of cacheStore.entries()) {
+    if (value.expiresAt && value.expiresAt <= now) {
+      cacheStore.delete(key);
+    }
+  }
+}
+
+function runCleanup() {
+  cleanupAuthChallenges();
+  cleanupExpiredCache();
+}
+
 async function loadCSV() {
+  const cachedRows = getCachedValue("csvRows");
   if (cachedRows) return cachedRows;
 
   if (!fs.existsSync(CSV_PATH)) {
@@ -358,7 +419,7 @@ async function loadCSV() {
       .on("error", reject);
   });
 
-  cachedRows = rows;
+  setCachedValue("csvRows", rows, CACHE_TTL_MS);
 
   console.log("CSV loaded");
   console.log("Delimiter detected:", JSON.stringify(delimiter));
@@ -373,6 +434,17 @@ app.get("/", (req, res) => {
     ok: true,
     message: "Nutritional Insights Backend Running",
     csvFound: fs.existsSync(CSV_PATH),
+  });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  if (!req.session || !req.session.user) {
+    return res.status(401).json({ authenticated: false });
+  }
+
+  return res.json({
+    authenticated: true,
+    user: req.session.user,
   });
 });
 
@@ -432,10 +504,9 @@ app.get("/api/auth/oauth/google/callback", (req, res, next) => {
         code,
         expiresAt: Date.now() + AUTH_TTL_MS,
         user: {
-          provider: user.provider,
-          id: user.id,
-          displayName: user.displayName,
           email: user.email,
+          name: user.name,
+          provider: user.provider,
         },
       });
 
@@ -475,10 +546,9 @@ app.get("/api/auth/oauth/github/callback", (req, res, next) => {
         code,
         expiresAt: Date.now() + AUTH_TTL_MS,
         user: {
-          provider: user.provider,
-          id: user.id,
-          displayName: user.displayName,
           email: user.email,
+          name: user.name,
+          provider: user.provider,
         },
       });
 
@@ -526,17 +596,62 @@ app.post("/api/auth/2fa/verify", (req, res) => {
 
     authChallenges.delete(challengeId);
 
+    req.session.user = {
+      email: challenge.user.email,
+      provider: challenge.user.provider,
+      name: challenge.user.name,
+    };
+
     res.json({
       ok: true,
       message: `${challenge.provider} login successful`,
-      user: challenge.user || {
-        provider: challenge.provider,
-        role: "student",
-      },
+      user: req.session.user,
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie("connect.sid");
+    res.json({ success: true, message: "Logged out successfully" });
+  });
+});
+
+app.get("/api/security/privacy-status", (req, res) => {
+  res.json({
+    minimalDataCollection: true,
+    temporaryOtpStorage: true,
+    secretsStoredInEnv: Boolean(process.env.SESSION_SECRET),
+    httpsExpectedInProduction: true,
+    otpEntries: authChallenges.size,
+    cacheEntries: cacheStore.size,
+    securityHeadersEnabled: true,
+    rateLimitingEnabled: true,
+    sessionCookiesProtected: true,
+    allowedOrigins,
+  });
+});
+
+app.get("/api/admin/cleanup-status", (req, res) => {
+  runCleanup();
+  res.json({
+    otpEntries: authChallenges.size,
+    cacheEntries: cacheStore.size,
+    automaticCleanupEnabled: true,
+    cleanupIntervalMinutes: CLEANUP_INTERVAL_MS / (60 * 1000),
+  });
+});
+
+app.post("/api/admin/run-cleanup", (req, res) => {
+  runCleanup();
+  res.json({
+    success: true,
+    message: "Cleanup completed successfully",
+    otpEntries: authChallenges.size,
+    cacheEntries: cacheStore.size,
+  });
 });
 
 app.get("/api/insights", async (req, res) => {
@@ -736,6 +851,11 @@ app.get("/api/clusters", async (req, res) => {
 });
 
 app.listen(PORT, () => {
+  setInterval(() => {
+    runCleanup();
+    console.log("Automatic cleanup completed");
+  }, CLEANUP_INTERVAL_MS);
+
   console.log(`Server running on port ${PORT}`);
   console.log(`CSV path: ${CSV_PATH}`);
 });
