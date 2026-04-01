@@ -26,13 +26,18 @@ export default function ChartsGrid({ data }) {
   // ✅ If backend sends chart-ready objects, we use them.
   // ✅ If backend isn't ready, we use demo data so UI still looks complete.
 
+  const PIE_COLORS = [
+    "#3b82f6", "#10b981", "#f59e0b", "#ef4444",
+    "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16",
+  ];
+
   const fallback = useMemo(() => {
     const barData = {
       labels: ["Vegan", "Keto", "Paleo"],
       datasets: [
-        { label: "Protein", data: [20, 30, 25] },
-        { label: "Carbs", data: [50, 10, 35] },
-        { label: "Fat", data: [15, 60, 30] },
+        { label: "Protein", data: [20, 30, 25], backgroundColor: "rgba(59,130,246,0.7)" },
+        { label: "Carbs",   data: [50, 10, 35], backgroundColor: "rgba(16,185,129,0.7)" },
+        { label: "Fat",     data: [15, 60, 30], backgroundColor: "rgba(245,158,11,0.7)" },
       ],
     };
 
@@ -45,13 +50,14 @@ export default function ChartsGrid({ data }) {
             { x: 50, y: 10 },
             { x: 35, y: 25 },
           ],
+          backgroundColor: "rgba(59,130,246,0.7)",
         },
       ],
     };
 
     const pieData = {
       labels: ["Vegan", "Keto", "Paleo"],
-      datasets: [{ data: [14, 9, 7] }],
+      datasets: [{ data: [14, 9, 7], backgroundColor: PIE_COLORS }],
     };
 
     const heatmap = {
@@ -67,13 +73,33 @@ export default function ChartsGrid({ data }) {
     return { barData, scatterData, pieData, heatmap };
   }, []);
 
-  // ✅ Use backend data if present, else fallback
-  const barData = data?.barData ?? fallback.barData;
+  // Use backend data if present, else fallback
+  const rawBar = data?.barData ?? fallback.barData;
+  const rawPie = data?.pieData ?? fallback.pieData;
   const scatterData = data?.scatterData ?? fallback.scatterData;
-  const pieData = data?.pieData ?? fallback.pieData;
-
-  // Heatmap expects: { labels: string[], values: number[][] }
   const heatmapData = data?.heatmap ?? fallback.heatmap;
+
+  // Inject colors so charts are always visible
+  const barData = {
+    ...rawBar,
+    datasets: rawBar.datasets.map((ds, i) => ({
+      ...ds,
+      backgroundColor: ds.backgroundColor ?? [
+        "rgba(59,130,246,0.7)",
+        "rgba(16,185,129,0.7)",
+        "rgba(245,158,11,0.7)",
+        "rgba(239,68,68,0.7)",
+      ][i % 4],
+    })),
+  };
+
+  const pieData = {
+    ...rawPie,
+    datasets: rawPie.datasets.map((ds) => ({
+      ...ds,
+      backgroundColor: ds.backgroundColor ?? PIE_COLORS,
+    })),
+  };
 
   return (
     <section className="mb-8">

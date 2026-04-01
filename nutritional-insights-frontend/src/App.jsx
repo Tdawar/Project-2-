@@ -8,6 +8,9 @@ import RecipesList from "./components/RecipesList";
 import ClustersList from "./components/Clusterslist";
 import InsightsSummary from "./components/InsightsSummary";
 import Spinner from "./components/Spinner";
+import SecurityCompliance from "./components/SecurityCompliance";
+import OAuthLogin from "./components/OAuthLogin";
+import CloudCleanup from "./components/CloudCleanup";
 
 /* Backend API */
 const API_BASE =
@@ -121,16 +124,16 @@ export default function App() {
 
       <main className="container mx-auto p-6">
 
-        {/* Insights */}
+        {/* Charts — always visible (fallback data until API loads) */}
+        <ChartsGrid data={active === "insights" ? data : null} />
+
+        {/* Summary cards — shown when insights data is loaded */}
         {active === "insights" && data && (
-          <>
-            <InsightsSummary summary={data.summary} />
-            <ChartsGrid data={data} />
-          </>
+          <InsightsSummary summary={data.summary} />
         )}
 
         {/* Filters */}
-        <section className="my-8">
+        <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-4">
             Filters and Data Interaction
           </h2>
@@ -151,7 +154,7 @@ export default function App() {
         </section>
 
         {/* API Buttons */}
-        <section className="my-8">
+        <section className="mb-8">
           <h2 className="text-2xl font-semibold mb-4">
             API Data Interaction
           </h2>
@@ -182,7 +185,16 @@ export default function App() {
           <ClustersList clusters={data.sample} />
         )}
 
-        {/* Pagination */}
+        {/* Security & Compliance */}
+        <SecurityCompliance />
+
+        {/* OAuth & 2FA */}
+        <OAuthLogin />
+
+        {/* Cloud Resource Cleanup */}
+        <CloudCleanup />
+
+        {/* Pagination — last section, matching the template */}
         <section className="my-10">
           <h2 className="text-2xl font-semibold mb-4">
             Pagination
@@ -194,16 +206,12 @@ export default function App() {
             pageSize={data?.meta?.pageSize || 10}
             onSet={(p) => setPage(p)}
           />
-
-          <div className="text-xs text-gray-500 mt-2">
-            Pagination uses backend meta.total.
-          </div>
         </section>
 
       </main>
 
       <footer className="bg-blue-600 p-4 text-white text-center mt-10">
-        © 2025 Nutritional Insights
+        &copy; 2025 Nutritional Insights. All Rights Reserved.
       </footer>
     </div>
   );
