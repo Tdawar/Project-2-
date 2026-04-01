@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const csv = require("csv-parser");
 const { kmeans } = require("ml-kmeans");
 const app = express();
@@ -13,8 +14,11 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 const CSV_PATH = path.join(__dirname, "All_Diets.csv");
+const LOGIN_PROVIDERS = new Set(["google", "github"]);
+const AUTH_TTL_MS = 5 * 60 * 1000;
 
 let cachedRows = null;
+const authChallenges = new Map();
 
 function toLower(s) {
   return String(s || "").toLowerCase().trim();
@@ -76,6 +80,19 @@ function pickValue(row, keys) {
     }
   }
   return "";
+}
+
+function generateSixDigitCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+}
+
+function cleanupAuthChallenges() {
+  const now = Date.now();
+  for (const [challengeId, challenge] of authChallenges.entries()) {
+    if (challenge.expiresAt <= now) {
+      authChallenges.delete(challengeId);
+    }
+  }
 }
 
 async function loadCSV() {
@@ -188,6 +205,86 @@ app.get("/", (req, res) => {
     message: "Nutritional Insights Backend Running",
     csvFound: fs.existsSync(CSV_PATH),
   });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    cleanupAuthChallenges();
+
+    const provider = toLower(req.body?.provider);
+    if (!LOGIN_PROVIDERS.has(provider)) {
+      return res.status(400).json({
+        ok: false,
+        error: "provider must be one of: google, github",
+      });
+    }
+
+    const challengeId = crypto.randomUUID();
+    const code = generateSixDigitCode();
+    const expiresAt = Date.now() + AUTH_TTL_MS;
+
+    authChallenges.set(challengeId, {
+      provider,
+      code,
+      expiresAt,
+    });
+
+    res.json({
+      ok: true,
+      provider,
+      challengeId,
+      // Demo-only: returned so the feature can be tested end-to-end.
+      demoCode: code,
+      expiresInSeconds: Math.floor(AUTH_TTL_MS / 1000),
+      message: `2FA code generated for ${provider}. Verify to complete login.`,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/auth/2fa/verify", (req, res) => {
+  try {
+    cleanupAuthChallenges();
+
+    const challengeId = String(req.body?.challengeId || "").trim();
+    const code = String(req.body?.code || "").trim();
+
+    if (!challengeId || !code) {
+      return res.status(400).json({
+        ok: false,
+        error: "challengeId and code are required",
+      });
+    }
+
+    const challenge = authChallenges.get(challengeId);
+    if (!challenge) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid or expired challenge",
+      });
+    }
+
+    if (challenge.code !== code) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid 2FA code",
+      });
+    }
+
+    authChallenges.delete(challengeId);
+
+    res.json({
+      ok: true,
+      message: `${challenge.provider} login successful`,
+      user: {
+        provider: challenge.provider,
+        role: "student",
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.get("/api/insights", async (req, res) => {
