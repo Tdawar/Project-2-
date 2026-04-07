@@ -29,7 +29,9 @@ export default function SecurityCompliance({
   onRefresh,
 }) {
   if (loading) {
-    return <div className="text-sm text-gray-600">Loading security status...</div>;
+    return (
+      <div className="text-sm text-gray-600">Loading security status...</div>
+    );
   }
 
   if (error) {
@@ -66,19 +68,28 @@ export default function SecurityCompliance({
         <SecurityRow
           label="Rate Limiting"
           enabled={Boolean(security.rateLimitEnabled)}
-          detail={`Window: ${Math.round((security.rateLimit?.windowMs || 0) / 60000)} min, Max: ${security.rateLimit?.max || 0} requests.`}
+          detail={`Window: ${Math.round(
+            (security.rateLimit?.windowMs || 0) / 60000,
+          )} min, Max: ${security.rateLimit?.max || 0} requests.`}
         />
 
         <SecurityRow
           label="Session Security"
           enabled={Boolean(security.session?.enabled)}
-          detail={`Cookie: ${security.session?.cookieName || "-"}, HttpOnly: ${String(security.session?.httpOnly)}, SameSite: ${security.session?.sameSite || "-"}, Secure: ${String(security.session?.secure)}`}
+          detail={`Cookie: ${security.session?.cookieName ||
+            "-"}, HttpOnly: ${String(
+            security.session?.httpOnly,
+          )}, SameSite: ${security.session?.sameSite || "-"}, Secure: ${String(
+            security.session?.secure,
+          )}`}
         />
 
         <SecurityRow
           label="Restricted CORS"
           enabled={Boolean(security.cors?.restricted)}
-          detail={`Allowed Origins: ${(security.cors?.allowedOrigins || []).join(", ") || "none"}`}
+          detail={`Allowed Origins: ${(
+            security.cors?.allowedOrigins || []
+          ).join(", ") || "none"}`}
         />
       </div>
 

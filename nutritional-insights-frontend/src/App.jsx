@@ -22,11 +22,7 @@ async function apiGet(endpoint, params) {
   const url = new URL(`${API_BASE}${endpoint}`);
 
   Object.entries(params || {}).forEach(([key, value]) => {
-    if (
-      value !== undefined &&
-      value !== null &&
-      String(value).trim() !== ""
-    ) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
       url.searchParams.set(key, String(value));
     }
   });
@@ -156,7 +152,6 @@ export default function App() {
       <Header />
 
       <main className="container mx-auto p-6">
-
         {/* Charts — always visible (fallback data until API loads) */}
         <ChartsGrid data={active === "insights" ? data : null} />
 
@@ -191,9 +186,7 @@ export default function App() {
 
         {/* API Buttons */}
         <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">
-            API Data Interaction
-          </h2>
+          <h2 className="text-2xl font-semibold mb-4">API Data Interaction</h2>
 
           <ApiButtons
             onInsights={fetchInsights}
@@ -204,17 +197,11 @@ export default function App() {
 
           {loading && <Spinner />}
 
-          {error && (
-            <div className="text-red-600 text-sm mt-3">
-              {error}
-            </div>
-          )}
+          {error && <div className="text-red-600 text-sm mt-3">{error}</div>}
         </section>
 
         {/* Recipes */}
-        {data && active === "recipes" && (
-          <RecipesList recipes={data.recipes} />
-        )}
+        {data && active === "recipes" && <RecipesList recipes={data.recipes} />}
 
         {/* Clusters */}
         {data && active === "clusters" && (
@@ -240,9 +227,7 @@ export default function App() {
 
         {/* Pagination — last section, matching the template */}
         <section className="my-10">
-          <h2 className="text-2xl font-semibold mb-4">
-            Pagination
-          </h2>
+          <h2 className="text-2xl font-semibold mb-4">Pagination</h2>
 
           <Pagination
             page={page}
@@ -251,7 +236,6 @@ export default function App() {
             onSet={(p) => setPage(p)}
           />
         </section>
-
       </main>
 
       <footer className="bg-blue-600 p-4 text-white text-center mt-10">
