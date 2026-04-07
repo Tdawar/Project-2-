@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Header from "./components/Header";
 import ChartsGrid from "./components/ChartsGrid";
 import Filters from "./components/Filters";
@@ -50,6 +50,9 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [securityStatus, setSecurityStatus] = useState(null);
+  const [securityLoading, setSecurityLoading] = useState(false);
+  const [securityError, setSecurityError] = useState("");
 
   const params = {
     q: search,
@@ -111,6 +114,21 @@ export default function App() {
     fetchInsights();
   }, []);
 
+  /* Fetch Security Status */
+  const fetchSecurityStatus = useCallback(async () => {
+    setSecurityLoading(true);
+    setSecurityError("");
+
+    try {
+      const json = await apiGet("/api/security/status");
+      setSecurityStatus(json.security || null);
+    } catch (e) {
+      setSecurityError(e.message || "Failed to fetch security status");
+    } finally {
+      setSecurityLoading(false);
+    }
+  }, []);
+
   /* Auto refresh insights when filters change */
   useEffect(() => {
     if (active === "insights") {
@@ -128,6 +146,10 @@ export default function App() {
       setPage(totalPages);
     }
   }, [data?.meta?.pageSize, data?.meta?.total, page]);
+
+  useEffect(() => {
+    fetchSecurityStatus();
+  }, [fetchSecurityStatus]);
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -200,7 +222,15 @@ export default function App() {
         )}
 
         {/* Security & Compliance */}
-        <SecurityCompliance />
+        <section className="my-10">
+          <h2 className="text-2xl font-semibold mb-4">Security & Compliance</h2>
+          <SecurityCompliance
+            security={securityStatus}
+            loading={securityLoading}
+            error={securityError}
+            onRefresh={fetchSecurityStatus}
+          />
+        </section>
 
         {/* OAuth & 2FA */}
         <OAuthLogin />
