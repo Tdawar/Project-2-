@@ -98,8 +98,100 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 const CSV_PATH = path.join(__dirname, "All_Diets.csv");
+const LOGIN_PROVIDERS = new Set(["google", "github"]);
+const AUTH_TTL_MS = 5 * 60 * 1000;
+/** Periodic sweep for expired OTP challenges (does not clear CSV cache). */
+const AUTO_CLEANUP_INTERVAL_MS = 2 * 60 * 1000;
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  "https://red-meadow-0888e270f.2.azurestaticapps.net";
 
 let cachedRows = null;
+const authChallenges = new Map();
+
+let lastCleanupAt = null;
+let lastCleanupStats = null;
+
+const smtpConfigured =
+  Boolean(process.env.SMTP_HOST) &&
+  Boolean(process.env.SMTP_PORT) &&
+  Boolean(process.env.SMTP_USER) &&
+  Boolean(process.env.SMTP_PASS) &&
+  Boolean(process.env.OTP_FROM_EMAIL);
+
+const mailer = smtpConfigured
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT),
+      secure: String(process.env.SMTP_SECURE || "false") === "true",
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    })
+  : null;
+
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
+
+passport.deserializeUser((user, done) => {
+  done(null, user);
+});
+
+if (
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET &&
+  process.env.GOOGLE_CALLBACK_URL
+) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: process.env.GOOGLE_CALLBACK_URL,
+      },
+      (accessToken, refreshToken, profile, done) => {
+        done(null, {
+          provider: "google",
+          id: profile.id,
+          displayName: profile.displayName,
+          email: profile.emails?.[0]?.value || "",
+        });
+      }
+    )
+  );
+}
+
+if (
+  process.env.GITHUB_CLIENT_ID &&
+  process.env.GITHUB_CLIENT_SECRET &&
+  process.env.GITHUB_CALLBACK_URL
+) {
+  passport.use(
+    new GitHubStrategy(
+      {
+        clientID: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET,
+        callbackURL: process.env.GITHUB_CALLBACK_URL,
+        scope: ["user:email"],
+      },
+      (accessToken, refreshToken, profile, done) => {
+        const email =
+          profile.emails?.find((e) => e.verified)?.value ||
+          profile.emails?.[0]?.value ||
+          "";
+
+        done(null, {
+          provider: "github",
+          id: profile.id,
+          displayName: profile.displayName || profile.username,
+          email,
+        });
+      }
+    )
+  );
+}
 
 function toLower(s) {
   return String(s || "")
@@ -171,11 +263,115 @@ function pickValue(row, keys) {
   return "";
 }
 
-function parseIntInRange(value, defaultValue, min, max) {
-  // Defensive parsing prevents NaN and constrains expensive input values.
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed)) return defaultValue;
-  return Math.min(max, Math.max(min, parsed));
+function generateSixDigitCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+}
+
+function cleanupAuthChallenges() {
+  const now = Date.now();
+  let removed = 0;
+  for (const [challengeId, challenge] of authChallenges.entries()) {
+    if (challenge.expiresAt <= now) {
+      authChallenges.delete(challengeId);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Removes expired OTP challenges and clears the in-memory CSV row cache.
+ * Next request to insights/recipes/clusters will reload from disk.
+ */
+function runFullResourceCleanup() {
+  const removedExpiredChallenges = cleanupAuthChallenges();
+  const csvCacheCleared = cachedRows !== null;
+  cachedRows = null;
+  lastCleanupAt = Date.now();
+  lastCleanupStats = {
+    removedExpiredChallenges,
+    csvCacheCleared,
+  };
+  return { ...lastCleanupStats, at: lastCleanupAt };
+}
+
+function getCleanupStatus() {
+  let nextExpiryAt = null;
+  const now = Date.now();
+  for (const challenge of authChallenges.values()) {
+    const exp = challenge.expiresAt;
+    if (nextExpiryAt === null || exp < nextExpiryAt) {
+      nextExpiryAt = exp;
+    }
+  }
+  return {
+    activeChallenges: authChallenges.size,
+    csvCacheLoaded: cachedRows !== null,
+    csvCacheRowCount: cachedRows ? cachedRows.length : 0,
+    lastCleanupAt,
+    lastCleanupStats,
+    nextExpiryAt,
+    nextExpiryInMs:
+      nextExpiryAt != null ? Math.max(0, nextExpiryAt - now) : null,
+  };
+}
+
+function maskEmail(email) {
+  const [local, domain] = String(email || "").split("@");
+  if (!local || !domain) return "not-available";
+  const visible = local.slice(0, 2);
+  return `${visible}${"*".repeat(Math.max(2, local.length - 2))}@${domain}`;
+}
+
+async function sendOtpEmail(toEmail, code, provider) {
+  if (!mailer) {
+    throw new Error("OTP email delivery is not configured on the server");
+  }
+
+  await mailer.sendMail({
+    from: process.env.OTP_FROM_EMAIL,
+    to: toEmail,
+    subject: "Your Nutritional Insights 2FA Code",
+    text: `Your ${provider} login OTP is ${code}. It expires in 5 minutes.`,
+  });
+}
+
+function resolveAuthOptions(provider) {
+  if (provider === "google") {
+    return {
+      strategy: "google",
+      options: { scope: ["profile", "email"] },
+    };
+  }
+
+  if (provider === "github") {
+    return {
+      strategy: "github",
+      options: { scope: ["read:user", "user:email"] },
+    };
+  }
+
+  return null;
+}
+
+function providerConfigured(provider) {
+  if (provider === "google") {
+    return Boolean(
+      process.env.GOOGLE_CLIENT_ID &&
+        process.env.GOOGLE_CLIENT_SECRET &&
+        process.env.GOOGLE_CALLBACK_URL
+    );
+  }
+
+  if (provider === "github") {
+    return Boolean(
+      process.env.GITHUB_CLIENT_ID &&
+        process.env.GITHUB_CLIENT_SECRET &&
+        process.env.GITHUB_CALLBACK_URL
+    );
+  }
+
+  return false;
 }
 
 async function loadCSV() {
@@ -531,7 +727,55 @@ app.get("/api/clusters", async (req, res) => {
   }
 });
 
+app.post("/api/cleanup", (req, res) => {
+  try {
+    const result = runFullResourceCleanup();
+    res.json({
+      ok: true,
+      removedExpiredChallenges: result.removedExpiredChallenges,
+      csvCacheCleared: result.csvCacheCleared,
+      at: new Date(result.at).toISOString(),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/cleanup/status", (req, res) => {
+  try {
+    const s = getCleanupStatus();
+    res.json({
+      ok: true,
+      activeChallenges: s.activeChallenges,
+      csvCacheLoaded: s.csvCacheLoaded,
+      csvCacheRowCount: s.csvCacheRowCount,
+      lastCleanupAt:
+        s.lastCleanupAt != null
+          ? new Date(s.lastCleanupAt).toISOString()
+          : null,
+      lastCleanupStats: s.lastCleanupStats,
+      nextChallengeExpiryAt:
+        s.nextExpiryAt != null ? new Date(s.nextExpiryAt).toISOString() : null,
+      nextChallengeExpiresInMs: s.nextExpiryInMs,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+const cleanupTimer = setInterval(() => {
+  const removed = cleanupAuthChallenges();
+  if (removed > 0) {
+    console.log(
+      `[cleanup] removed ${removed} expired OTP challenge(s) (auto)`
+    );
+  }
+}, AUTO_CLEANUP_INTERVAL_MS);
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`CSV path: ${CSV_PATH}`);
+  console.log(
+    `Auto OTP cleanup every ${AUTO_CLEANUP_INTERVAL_MS / 1000}s (timer ${cleanupTimer})`
+  );
 });
