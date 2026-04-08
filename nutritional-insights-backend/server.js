@@ -94,12 +94,18 @@ const PORT = process.env.PORT || 3001;
 const CSV_PATH = path.join(__dirname, "All_Diets.csv");
 const LOGIN_PROVIDERS = new Set(["google", "github"]);
 const AUTH_TTL_MS = 5 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = Number.parseInt(
+  process.env.CLEANUP_INTERVAL_MS || "60000",
+  10,
+);
 const FRONTEND_URL =
   process.env.FRONTEND_URL ||
   "https://red-meadow-0888e270f.2.azurestaticapps.net";
 
 let cachedRows = null;
 const authChallenges = new Map();
+let lastManualCleanupAt = null;
+let lastManualCleanupSummary = null;
 
 const smtpConfigured =
   Boolean(process.env.SMTP_HOST) &&
@@ -258,11 +264,47 @@ function generateSixDigitCode() {
 
 function cleanupAuthChallenges() {
   const now = Date.now();
+  let removed = 0;
   for (const [challengeId, challenge] of authChallenges.entries()) {
     if (challenge.expiresAt <= now) {
       authChallenges.delete(challengeId);
+      removed += 1;
     }
   }
+  return removed;
+}
+
+function invalidateCsvCache() {
+  const wasLoaded = cachedRows !== null;
+  cachedRows = null;
+  return wasLoaded;
+}
+
+function countExpiredAuthChallenges() {
+  const now = Date.now();
+  let n = 0;
+  for (const challenge of authChallenges.values()) {
+    if (challenge.expiresAt <= now) n += 1;
+  }
+  return n;
+}
+
+function getCleanupStatusPayload() {
+  return {
+    otpChallenges: {
+      active: authChallenges.size,
+      expiredPendingRemoval: countExpiredAuthChallenges(),
+      ttlMs: AUTH_TTL_MS,
+    },
+    csvCache: {
+      loaded: cachedRows !== null,
+      rowCount: cachedRows ? cachedRows.length : 0,
+    },
+    lastManualCleanup: lastManualCleanupAt
+      ? { at: lastManualCleanupAt, summary: lastManualCleanupSummary }
+      : null,
+    scheduledCleanupIntervalMs: CLEANUP_INTERVAL_MS,
+  };
 }
 
 function maskEmail(email) {
@@ -459,6 +501,41 @@ app.get("/api/security/status", (req, res) => {
         allowedOrigins,
       },
     },
+  });
+});
+
+function handleCleanupRequest(req, res) {
+  try {
+    const clearCsvCache = req.body?.clearCsvCache !== false;
+    const removedExpiredOtpChallenges = cleanupAuthChallenges();
+    const csvCacheInvalidated = clearCsvCache ? invalidateCsvCache() : false;
+    lastManualCleanupAt = new Date().toISOString();
+    lastManualCleanupSummary = {
+      removedExpiredOtpChallenges,
+      csvCacheInvalidated,
+    };
+    res.json({
+      ok: true,
+      timestamp: lastManualCleanupAt,
+      removedExpiredOtpChallenges,
+      csvCacheInvalidated,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+}
+
+// POST is preferred (body can set clearCsvCache). GET is supported so a browser
+// address-bar test does not 404 — otherwise only POST is registered and GET
+// would not match any route.
+app.post("/api/cleanup", handleCleanupRequest);
+app.get("/api/cleanup", handleCleanupRequest);
+
+app.get("/api/cleanup/status", (req, res) => {
+  res.json({
+    ok: true,
+    timestamp: new Date().toISOString(),
+    ...getCleanupStatusPayload(),
   });
 });
 
@@ -831,4 +908,21 @@ app.get("/api/clusters", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`CSV path: ${CSV_PATH}`);
+  console.log(
+    `Scheduled OTP cleanup every ${CLEANUP_INTERVAL_MS}ms (CLEANUP_INTERVAL_MS)`,
+  );
+
+  const cleanupTimer = setInterval(() => {
+    const removed = cleanupAuthChallenges();
+    if (removed > 0) {
+      console.log(
+        `[cleanup] removed ${removed} expired auth challenge(s) (scheduled)`,
+      );
+    }
+  }, CLEANUP_INTERVAL_MS);
+  cleanupTimer.unref?.();
+
+  const stopCleanup = () => clearInterval(cleanupTimer);
+  process.once("SIGTERM", stopCleanup);
+  process.once("SIGINT", stopCleanup);
 });
