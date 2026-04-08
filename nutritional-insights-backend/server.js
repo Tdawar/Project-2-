@@ -1,5 +1,7 @@
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -17,10 +19,59 @@ const app = express();
 
 console.log("LATEST AZURE BACKEND VERSION LOADED");
 
-app.use(cors());
+function normalizeOrigin(origin) {
+  return String(origin || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+const defaultAllowedOrigins = [
+  "http://localhost:5173",
+  "https://red-meadow-0888e270f.2.azurestaticapps.net",
+].map(normalizeOrigin);
+
+const configuredOrigins = (
+  process.env.FRONTEND_ORIGINS ||
+  process.env.FRONTEND_ORIGIN ||
+  ""
+)
+  .split(",")
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
+const allowedOrigins = Array.from(
+  new Set([...defaultAllowedOrigins, ...configuredOrigins]),
+);
+
+const rateLimitMax = Number.parseInt(process.env.RATE_LIMIT_MAX || "100", 10);
+const apiRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number.isFinite(rateLimitMax) ? Math.max(10, rateLimitMax) : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests from this IP" },
+});
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS origin not allowed"));
+    },
+    credentials: true,
+    optionsSuccessStatus: 200,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  }),
+);
 app.use(express.json());
 
 app.set("trust proxy", 1);
+app.use(helmet());
+app.use("/api", apiRateLimit);
 
 app.use(
   session({
@@ -33,7 +84,7 @@ app.use(
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: 10 * 60 * 1000,
     },
-  })
+  }),
 );
 
 app.use(passport.initialize());
@@ -96,8 +147,8 @@ if (
           displayName: profile.displayName,
           email: profile.emails?.[0]?.value || "",
         });
-      }
-    )
+      },
+    ),
   );
 }
 
@@ -126,18 +177,22 @@ if (
           displayName: profile.displayName || profile.username,
           email,
         });
-      }
-    )
+      },
+    ),
   );
 }
 
 function toLower(s) {
-  return String(s || "").toLowerCase().trim();
+  return String(s || "")
+    .toLowerCase()
+    .trim();
 }
 
 function toNumber(v) {
   if (v === null || v === undefined) return 0;
-  const cleaned = String(v).replace(",", ".").trim();
+  const cleaned = String(v)
+    .replace(",", ".")
+    .trim();
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : 0;
 }
@@ -186,7 +241,11 @@ function detectDelimiter(filePath) {
 
 function pickValue(row, keys) {
   for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") {
+    if (
+      row[key] !== undefined &&
+      row[key] !== null &&
+      String(row[key]).trim() !== ""
+    ) {
       return String(row[key]).trim();
     }
   }
@@ -249,7 +308,7 @@ function providerConfigured(provider) {
     return Boolean(
       process.env.GOOGLE_CLIENT_ID &&
         process.env.GOOGLE_CLIENT_SECRET &&
-        process.env.GOOGLE_CALLBACK_URL
+        process.env.GOOGLE_CALLBACK_URL,
     );
   }
 
@@ -257,7 +316,7 @@ function providerConfigured(provider) {
     return Boolean(
       process.env.GITHUB_CLIENT_ID &&
         process.env.GITHUB_CLIENT_SECRET &&
-        process.env.GITHUB_CALLBACK_URL
+        process.env.GITHUB_CALLBACK_URL,
     );
   }
 
@@ -280,10 +339,12 @@ async function loadCSV() {
         csv({
           separator: delimiter,
           mapHeaders: ({ header }) =>
-            String(header || "").replace(/^\uFEFF/, "").trim(),
+            String(header || "")
+              .replace(/^\uFEFF/, "")
+              .trim(),
           mapValues: ({ value }) =>
             typeof value === "string" ? value.trim() : value,
-        })
+        }),
       )
       .on("data", (row) => {
         const diet = pickValue(row, [
@@ -320,7 +381,7 @@ async function loadCSV() {
             row["Protein (g)"] ??
             row["Protein"] ??
             row["protein"] ??
-            row["protein(g)"]
+            row["protein(g)"],
         );
 
         const carbs = toNumber(
@@ -329,7 +390,7 @@ async function loadCSV() {
             row["Carbohydrates (g)"] ??
             row["Carbohydrates"] ??
             row["Carbs"] ??
-            row["carbs"]
+            row["carbs"],
         );
 
         const fat = toNumber(
@@ -337,7 +398,7 @@ async function loadCSV() {
             row["Fat (g)"] ??
             row["Fat"] ??
             row["fat"] ??
-            row["Fats (g)"]
+            row["Fats (g)"],
         );
 
         if (!diet || !recipe) return;
@@ -376,6 +437,31 @@ app.get("/", (req, res) => {
   });
 });
 
+app.get("/api/security/status", (req, res) => {
+  res.json({
+    ok: true,
+    timestamp: new Date().toISOString(),
+    security: {
+      helmetEnabled: true,
+      rateLimitEnabled: true,
+      rateLimit: {
+        windowMs: 15 * 60 * 1000,
+        max: apiRateLimit.max,
+      },
+      session: {
+        enabled: true,
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      },
+      cors: {
+        restricted: true,
+        allowedOrigins,
+      },
+    },
+  });
+});
+
 app.get("/api/auth/providers", (req, res) => {
   res.json({
     ok: true,
@@ -405,7 +491,7 @@ app.get("/api/auth/oauth/:provider/start", (req, res, next) => {
   return passport.authenticate(authConfig.strategy, authConfig.options)(
     req,
     res,
-    next
+    next,
   );
 });
 
@@ -442,11 +528,15 @@ app.get("/api/auth/oauth/google/callback", (req, res, next) => {
       await sendOtpEmail(user.email, code, user.provider);
 
       return res.redirect(
-        `${returnTo}?oauthChallenge=${encodeURIComponent(challengeId)}&oauthProvider=${encodeURIComponent(user.provider)}&oauthEmail=${encodeURIComponent(maskEmail(user.email))}`
+        `${returnTo}?oauthChallenge=${encodeURIComponent(
+          challengeId,
+        )}&oauthProvider=${encodeURIComponent(
+          user.provider,
+        )}&oauthEmail=${encodeURIComponent(maskEmail(user.email))}`,
       );
     } catch (e) {
       return res.redirect(
-        `${returnTo}?authError=${encodeURIComponent("otp_delivery_failed")}`
+        `${returnTo}?authError=${encodeURIComponent("otp_delivery_failed")}`,
       );
     }
   })(req, res, next);
@@ -485,11 +575,15 @@ app.get("/api/auth/oauth/github/callback", (req, res, next) => {
       await sendOtpEmail(user.email, code, user.provider);
 
       return res.redirect(
-        `${returnTo}?oauthChallenge=${encodeURIComponent(challengeId)}&oauthProvider=${encodeURIComponent(user.provider)}&oauthEmail=${encodeURIComponent(maskEmail(user.email))}`
+        `${returnTo}?oauthChallenge=${encodeURIComponent(
+          challengeId,
+        )}&oauthProvider=${encodeURIComponent(
+          user.provider,
+        )}&oauthEmail=${encodeURIComponent(maskEmail(user.email))}`,
       );
     } catch (e) {
       return res.redirect(
-        `${returnTo}?authError=${encodeURIComponent("otp_delivery_failed")}`
+        `${returnTo}?authError=${encodeURIComponent("otp_delivery_failed")}`,
       );
     }
   })(req, res, next);
@@ -557,7 +651,7 @@ app.get("/api/insights", async (req, res) => {
         (r) =>
           toLower(r.diet).includes(q) ||
           toLower(r.name).includes(q) ||
-          toLower(r.cuisine_type).includes(q)
+          toLower(r.cuisine_type).includes(q),
       );
     }
 
@@ -665,8 +759,7 @@ app.get("/api/recipes", async (req, res) => {
     if (q) {
       filtered = filtered.filter(
         (r) =>
-          toLower(r.name).includes(q) ||
-          toLower(r.cuisine_type).includes(q)
+          toLower(r.name).includes(q) || toLower(r.cuisine_type).includes(q),
       );
     }
 
@@ -708,8 +801,8 @@ app.get("/api/clusters", async (req, res) => {
     const result = kmeans(X, k);
 
     const centers = result.centroids.map((c) =>
-  c.map((v) => Number(v.toFixed(2)))
-);
+      c.map((v) => Number(v.toFixed(2))),
+    );
 
     const sample = [];
     const limit = Math.min(50, rows.length);
