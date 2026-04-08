@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Header from "./components/Header";
 import ChartsGrid from "./components/ChartsGrid";
 import Filters from "./components/Filters";
@@ -22,7 +22,11 @@ async function apiGet(endpoint, params) {
   const url = new URL(`${API_BASE}${endpoint}`);
 
   Object.entries(params || {}).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && String(value).trim() !== "") {
+    if (
+      value !== undefined &&
+      value !== null &&
+      String(value).trim() !== ""
+    ) {
       url.searchParams.set(key, String(value));
     }
   });
@@ -46,9 +50,6 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [securityStatus, setSecurityStatus] = useState(null);
-  const [securityLoading, setSecurityLoading] = useState(false);
-  const [securityError, setSecurityError] = useState("");
 
   const params = {
     q: search,
@@ -110,21 +111,6 @@ export default function App() {
     fetchInsights();
   }, []);
 
-  /* Fetch Security Status */
-  const fetchSecurityStatus = useCallback(async () => {
-    setSecurityLoading(true);
-    setSecurityError("");
-
-    try {
-      const json = await apiGet("/api/security/status");
-      setSecurityStatus(json.security || null);
-    } catch (e) {
-      setSecurityError(e.message || "Failed to fetch security status");
-    } finally {
-      setSecurityLoading(false);
-    }
-  }, []);
-
   /* Auto refresh insights when filters change */
   useEffect(() => {
     if (active === "insights") {
@@ -143,15 +129,12 @@ export default function App() {
     }
   }, [data?.meta?.pageSize, data?.meta?.total, page]);
 
-  useEffect(() => {
-    fetchSecurityStatus();
-  }, [fetchSecurityStatus]);
-
   return (
     <div className="min-h-screen bg-gray-100">
       <Header />
 
       <main className="container mx-auto p-6">
+
         {/* Charts — always visible (fallback data until API loads) */}
         <ChartsGrid data={active === "insights" ? data : null} />
 
@@ -186,7 +169,9 @@ export default function App() {
 
         {/* API Buttons */}
         <section className="mb-8">
-          <h2 className="text-2xl font-semibold mb-4">API Data Interaction</h2>
+          <h2 className="text-2xl font-semibold mb-4">
+            API Data Interaction
+          </h2>
 
           <ApiButtons
             onInsights={fetchInsights}
@@ -197,11 +182,17 @@ export default function App() {
 
           {loading && <Spinner />}
 
-          {error && <div className="text-red-600 text-sm mt-3">{error}</div>}
+          {error && (
+            <div className="text-red-600 text-sm mt-3">
+              {error}
+            </div>
+          )}
         </section>
 
         {/* Recipes */}
-        {data && active === "recipes" && <RecipesList recipes={data.recipes} />}
+        {data && active === "recipes" && (
+          <RecipesList recipes={data.recipes} />
+        )}
 
         {/* Clusters */}
         {data && active === "clusters" && (
@@ -209,15 +200,7 @@ export default function App() {
         )}
 
         {/* Security & Compliance */}
-        <section className="my-10">
-          <h2 className="text-2xl font-semibold mb-4">Security & Compliance</h2>
-          <SecurityCompliance
-            security={securityStatus}
-            loading={securityLoading}
-            error={securityError}
-            onRefresh={fetchSecurityStatus}
-          />
-        </section>
+        <SecurityCompliance />
 
         {/* OAuth & 2FA */}
         <OAuthLogin />
@@ -227,7 +210,9 @@ export default function App() {
 
         {/* Pagination — last section, matching the template */}
         <section className="my-10">
-          <h2 className="text-2xl font-semibold mb-4">Pagination</h2>
+          <h2 className="text-2xl font-semibold mb-4">
+            Pagination
+          </h2>
 
           <Pagination
             page={page}
@@ -236,6 +221,7 @@ export default function App() {
             onSet={(p) => setPage(p)}
           />
         </section>
+
       </main>
 
       <footer className="bg-blue-600 p-4 text-white text-center mt-10">
